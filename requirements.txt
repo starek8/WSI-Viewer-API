@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+openslide-python
+pillow
+python-multipart

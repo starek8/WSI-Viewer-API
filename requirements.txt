@@ -1,5 +1,7 @@
-fastapi
-uvicorn[standard]
-openslide-python
-pillow
-python-multipart
+fastapi==0.111.1
+uvicorn[standard]==0.23.2
+openslide-python==1.2.0
+pillow==10.1.0
+python-multipart>=0.0.7
+SQLAlchemy==2.0.22
+aiosqlite==0.18.0

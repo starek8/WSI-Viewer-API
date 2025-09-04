@@ -2,14 +2,19 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install only system dependencies needed by openslide
+# Install system dependencies needed to build openslide-python and Pillow
 RUN apt-get update && apt-get install -y \
-    libopenslide0 \
-    openslide-tools \
+    gcc \
+    g++ \
+    make \
+    libopenslide-dev \
+    libjpeg-dev \
+    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy app code

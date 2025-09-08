@@ -1,10 +1,11 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Body
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse, FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from pathlib import Path
 from openslide import OpenSlide, deepzoom
-import shutil, zipfile
+from PIL import Image
+import shutil, zipfile, math
 from io import BytesIO
 
 from db import Slide, ViewState, AsyncSessionLocal
@@ -26,26 +27,45 @@ async def get_db():
 
 def register_routes(app: FastAPI):
     @app.get("/", response_class=HTMLResponse)
-    def root():
-        return """
+    async def root(db: AsyncSession = Depends(get_db)):
+        result = await db.execute(select(Slide))
+        slides = result.scalars().all()
+
+        slide_links = ""
+        if slides:
+            slide_links += "<h2>Dostępne slajdy:</h2><ul>"
+            for s in slides:
+                mrxs_files = list(Path(s.path).glob("*.mrxs"))
+                if not mrxs_files:
+                    continue
+                slide_links += f'<li><a href="/viewer/{s.uuid}/{mrxs_files[0].name}">{s.name}</a></li>'
+            slide_links += "</ul>"
+        else:
+            slide_links = "<p>Brak wgranych slajdów.</p>"
+
+        return f"""
         <html>
         <head>
             <title>WSI Viewer</title>
             <style>
-                body { font-family: Arial, sans-serif; background-color: #fafafa; text-align: center; padding: 40px; }
-                h1 { color: #2c3e50; }
-                .dropzone {
+                body {{ font-family: Arial, sans-serif; background-color: #fafafa; text-align: center; padding: 2em; }}
+                h1 {{ color: #2c3e50; }}
+                .dropzone {{
                     border: 3px dashed #3498db;
                     border-radius: 10px;
-                    padding: 50px;
+                    padding: 3em;
                     background: #ecf6fb;
                     color: #555;
                     cursor: pointer;
                     transition: background 0.3s;
-                    margin: 30px auto;
+                    margin: 2em auto;
                     width: 60%;
-                }
-                .dropzone.dragover { background: #d6ebfa; }
+                }}
+                .dropzone.dragover {{ background: #d6ebfa; }}
+                ul {{ list-style: none; padding: 0; }}
+                li {{ margin: 0.5em 0; }}
+                a {{ color: #3498db; text-decoration: none; font-weight: bold; }}
+                a:hover {{ text-decoration: underline; }}
             </style>
         </head>
         <body>
@@ -54,36 +74,37 @@ def register_routes(app: FastAPI):
                 <div id="dropzone" class="dropzone">Drag & Drop .zip file here<br>or click to select</div>
                 <input type="file" id="fileInput" name="file" accept=".zip" style="display:none" />
             </form>
+            {slide_links}
             <script>
                 const dropzone = document.getElementById("dropzone");
                 const fileInput = document.getElementById("fileInput");
 
                 dropzone.addEventListener("click", () => fileInput.click());
-                dropzone.addEventListener("dragover", (e) => {
+                dropzone.addEventListener("dragover", (e) => {{
                     e.preventDefault();
                     dropzone.classList.add("dragover");
-                });
+                }});
                 dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
-                dropzone.addEventListener("drop", async (e) => {
+                dropzone.addEventListener("drop", async (e) => {{
                     e.preventDefault();
                     dropzone.classList.remove("dragover");
                     const file = e.dataTransfer.files[0];
                     if (file) await uploadFile(file);
-                });
-                fileInput.addEventListener("change", async () => {
+                }});
+                fileInput.addEventListener("change", async () => {{
                     if (fileInput.files.length > 0) await uploadFile(fileInput.files[0]);
-                });
+                }});
 
-                async function uploadFile(file) {
+                async function uploadFile(file) {{
                     const formData = new FormData();
                     formData.append("file", file);
-                    const res = await fetch("/upload", { method: "POST", body: formData });
-                    if (res.redirected) {
+                    const res = await fetch("/upload", {{ method: "POST", body: formData }});
+                    if (res.redirected) {{
                         window.location.href = res.url;
-                    } else {
+                    }} else {{
                         alert("Upload failed!");
-                    }
-                }
+                    }}
+                }}
             </script>
         </body>
         </html>
@@ -104,7 +125,7 @@ def register_routes(app: FastAPI):
         with open(zip_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # Extract zip without keeping top-level folder (normalize structure)
+        # Extract zip without keeping top-level folder
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             for member in zip_ref.namelist():
                 parts = Path(member).parts
@@ -151,12 +172,31 @@ def register_routes(app: FastAPI):
             <style>
                 body, html {{ margin:0; padding:0; height:100%; }}
                 #openseadragon {{ width: 100%; height: 100vh; background:#000; }}
-                #toolbar {{ position: absolute; top: 10px; left: 10px; z-index: 10; }}
+                #toolbar {{
+                    position: absolute;
+                    top: 1.5em;
+                    left: 10vw;
+                    z-index: 10;
+                }}
+                #toolbar button {{
+                    padding: 0.6em 1.2em;
+                    font-size: 1em;
+                    border-radius: 8px;
+                    border: none;
+                    background: #3498db;
+                    color: white;
+                    cursor: pointer;
+                    margin-right: 0.5em;
+                }}
+                #toolbar button:hover {{
+                    background: #2980b9;
+                }}
             </style>
         </head>
         <body>
             <div id="toolbar">
-                <button onclick="saveView()">Save View</button>
+                <button onclick="window.location.href='/'">Powrót na stronę główną</button>
+                <button id="saveBtn">Zapisz widok</button>
             </div>
             <div id="openseadragon"></div>
             <script>
@@ -167,19 +207,52 @@ def register_routes(app: FastAPI):
                     tileSources: "/dzi/{slide_uuid}/{filename}"
                 }});
 
+                document.getElementById("saveBtn").addEventListener("click", saveView);
+
                 async function saveView() {{
                     const vp = viewer.viewport;
-                    const data = {{
-                        zoom: vp.getZoom(),
-                        center_x: vp.getCenter().x,
-                        center_y: vp.getCenter().y
+
+                    // Prostokąt widoczny na ekranie w jednostkach viewportu
+                    const bounds = vp.getBounds(true); // bez rotacji; to co faktycznie widzisz
+                    // Konwersja do pikseli obrazu (poziom 0)
+                    const imgRect = vp.viewportToImageRectangle(bounds);
+
+                    // Rozmiar okna (do ewentualnego przeskalowania JPG do rozdzielczości ekranu)
+                    const container = viewer.container;
+                    const target_w = container.clientWidth;
+                    const target_h = container.clientHeight;
+
+                    const body = {{
+                        x: Math.round(imgRect.x),
+                        y: Math.round(imgRect.y),
+                        width: Math.round(imgRect.width),
+                        height: Math.round(imgRect.height),
+                        target_w,
+                        target_h
                     }};
-                    await fetch(`/save_view/${{slide_uuid}}`, {{
+
+                    const res = await fetch(`/save_view/${{slide_uuid}}`, {{
                         method: "POST",
                         headers: {{ "Content-Type": "application/json" }},
-                        body: JSON.stringify(data)
+                        body: JSON.stringify(body)
                     }});
-                    alert("View saved!");
+
+                    if (!res.ok) {{
+                        const msg = await res.text();
+                        alert("Failed to save view: " + msg);
+                        return;
+                    }}
+
+                    // Auto-download
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = "saved_view.jpg";
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
                 }}
             </script>
         </body>
@@ -225,20 +298,87 @@ def register_routes(app: FastAPI):
 
     @app.post("/save_view/{slide_uuid}")
     async def save_view(slide_uuid: str, data: dict = Body(...), db: AsyncSession = Depends(get_db)):
+        """
+        Odbiera współrzędne widocznego prostokąta w pikselach poziomu 0:
+        { x, y, width, height, target_w, target_h }
+        Zwraca JPG (attachment) – auto-download po stronie przeglądarki.
+        """
         result = await db.execute(select(Slide).where(Slide.uuid == slide_uuid))
         slide = result.scalar_one_or_none()
         if not slide:
             raise HTTPException(status_code=404, detail="Slide not found")
 
+        # Walidacja wejścia
+        for key in ("x", "y", "width", "height"):
+            if key not in data:
+                raise HTTPException(status_code=400, detail=f"Missing '{key}' in body")
+
+        x = int(data["x"])
+        y = int(data["y"])
+        w = int(data["width"])
+        h = int(data["height"])
+        target_w = int(data.get("target_w") or 0)
+        target_h = int(data.get("target_h") or 0)
+
+        # Otwórz slajd
+        mrxs_files = list(Path(slide.path).glob("*.mrxs"))
+        if not mrxs_files:
+            raise HTTPException(status_code=404, detail="No slide file found")
+        slide_obj = OpenSlide(str(mrxs_files[0]))
+
+        img_w, img_h = slide_obj.dimensions
+
+        # Przytnij do granic obrazu i zabezpiecz przed ujemnymi/zerowymi rozmiarami
+        x0 = max(0, min(x, img_w - 1))
+        y0 = max(0, min(y, img_h - 1))
+        x1 = max(x0 + 1, min(x + w, img_w))
+        y1 = max(y0 + 1, min(y + h, img_h))
+
+        crop_w = x1 - x0
+        crop_h = y1 - y0
+
+        # Zapisz stan (opcjonalnie – podgląd: środek i "zoom" wyliczone z prostokąta)
+        center_x = (x0 + crop_w / 2) / img_w
+        center_y = (y0 + crop_h / 2) / img_h
+        approx_zoom = max(img_w / crop_w, img_h / crop_h)  # przybliżenie
+
         state = ViewState(
             slide_id=slide.id,
-            zoom_level=data["zoom"],
-            center_x=data["center_x"],
-            center_y=data["center_y"]
+            zoom_level=float(approx_zoom),
+            center_x=float(center_x),
+            center_y=float(center_y)
         )
         db.add(state)
         await db.commit()
-        return {"status": "saved"}
+        await db.refresh(state)
+
+        # Pobierz region z poziomu 0 i ewentualnie przeskaluj do rozdzielczości okna
+        try:
+            region = slide_obj.read_region((x0, y0), 0, (crop_w, crop_h)).convert("RGB")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"read_region failed: {e}")
+
+        # Jeśli znamy rozmiar okna, skompresuj do niego (lżejszy plik, 1:1 z tym co widzi user)
+        if target_w > 0 and target_h > 0:
+            # Zachowaj aspekt prostokąta widoku – dopasuj do okna bez rozciągania
+            scale = min(target_w / crop_w, target_h / crop_h)
+            out_w = max(1, int(crop_w * scale))
+            out_h = max(1, int(crop_h * scale))
+            if out_w != crop_w or out_h != crop_h:
+                region = region.resize((out_w, out_h), Image.LANCZOS)
+
+        # Zapisz na dysku (opcjonalnie) i zwróć jako attachment
+        snapshot_path = Path(slide.path) / f"view_{state.id}.jpg"
+        region.save(snapshot_path, "JPEG", quality=90)
+
+        # Nagłówek Content-Disposition wymusza pobranie przy bezpośrednim wejściu na URL,
+        # ale my i tak robimy download przez blob – to dodatkowe zabezpieczenie.
+        return FileResponse(
+            snapshot_path,
+            filename=f"view_{state.id}.jpg",
+            media_type="image/jpeg",
+            headers={"Content-Disposition": f'attachment; filename="view_{state.id}.jpg"'}
+        )
 
     @app.get("/last_view/{slide_uuid}")
     async def last_view(slide_uuid: str, db: AsyncSession = Depends(get_db)):

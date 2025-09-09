@@ -7,6 +7,7 @@ from openslide import OpenSlide, deepzoom
 from PIL import Image
 import shutil, zipfile, math
 from io import BytesIO
+from base64 import b64decode
 
 from db import Slide, ViewState, AsyncSessionLocal
 
@@ -169,6 +170,7 @@ def register_routes(app: FastAPI):
         <head>
             <title>Viewer - {filename}</title>
             <script src="https://openseadragon.github.io/openseadragon/openseadragon.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
             <style>
                 body, html {{ margin:0; padding:0; height:100%; }}
                 #openseadragon {{ width: 100%; height: 100vh; background:#000; }}
@@ -211,24 +213,19 @@ def register_routes(app: FastAPI):
 
                 async function saveView() {{
                     const vp = viewer.viewport;
+                    const viewState = {{
+                        zoom: vp.getZoom(),
+                        center_x: vp.getCenter().x,
+                        center_y: vp.getCenter().y,
+                        rotation: vp.getRotation()
+                    }};
 
-                    // Prostokąt widoczny na ekranie w jednostkach viewportu
-                    const bounds = vp.getBounds(true); // bez rotacji; to co faktycznie widzisz
-                    // Konwersja do pikseli obrazu (poziom 0)
-                    const imgRect = vp.viewportToImageRectangle(bounds);
-
-                    // Rozmiar okna (do ewentualnego przeskalowania JPG do rozdzielczości ekranu)
-                    const container = viewer.container;
-                    const target_w = container.clientWidth;
-                    const target_h = container.clientHeight;
+                    const canvas = await html2canvas(document.getElementById("openseadragon"));
+                    const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
 
                     const body = {{
-                        x: Math.round(imgRect.x),
-                        y: Math.round(imgRect.y),
-                        width: Math.round(imgRect.width),
-                        height: Math.round(imgRect.height),
-                        target_w,
-                        target_h
+                        snapshot: dataUrl,
+                        viewState
                     }};
 
                     const res = await fetch(`/save_view/${{slide_uuid}}`, {{
@@ -238,21 +235,11 @@ def register_routes(app: FastAPI):
                     }});
 
                     if (!res.ok) {{
-                        const msg = await res.text();
-                        alert("Failed to save view: " + msg);
+                        alert("Save failed: " + (await res.text()));
                         return;
                     }}
 
-                    // Auto-download
-                    const blob = await res.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = "saved_view.jpg";
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    window.URL.revokeObjectURL(url);
+                    alert("Widok zapisany!");
                 }}
             </script>
         </body>
@@ -274,7 +261,8 @@ def register_routes(app: FastAPI):
         return Response(dz.get_dzi("jpeg"), media_type="application/xml")
 
     @app.get("/dzi/{slide_uuid}/{filename}_files/{level}/{col}_{row}.jpeg")
-    async def dzi_tile(slide_uuid: str, filename: str, level: int, col: int, row: int, db: AsyncSession = Depends(get_db)):
+    async def dzi_tile(slide_uuid: str, filename: str, level: int, col: int, row: int,
+                       db: AsyncSession = Depends(get_db)):
         result = await db.execute(select(Slide).where(Slide.uuid == slide_uuid))
         slide = result.scalar_one_or_none()
         if not slide:
@@ -298,87 +286,36 @@ def register_routes(app: FastAPI):
 
     @app.post("/save_view/{slide_uuid}")
     async def save_view(slide_uuid: str, data: dict = Body(...), db: AsyncSession = Depends(get_db)):
-        """
-        Odbiera współrzędne widocznego prostokąta w pikselach poziomu 0:
-        { x, y, width, height, target_w, target_h }
-        Zwraca JPG (attachment) – auto-download po stronie przeglądarki.
-        """
         result = await db.execute(select(Slide).where(Slide.uuid == slide_uuid))
         slide = result.scalar_one_or_none()
         if not slide:
             raise HTTPException(status_code=404, detail="Slide not found")
 
-        # Walidacja wejścia
-        for key in ("x", "y", "width", "height"):
-            if key not in data:
-                raise HTTPException(status_code=400, detail=f"Missing '{key}' in body")
+        snapshot_b64 = data.get("snapshot")
+        view = data.get("viewState")
+        if not snapshot_b64 or not view:
+            raise HTTPException(status_code=400, detail="Missing snapshot or viewState")
 
-        x = int(data["x"])
-        y = int(data["y"])
-        w = int(data["width"])
-        h = int(data["height"])
-        target_w = int(data.get("target_w") or 0)
-        target_h = int(data.get("target_h") or 0)
+        # Dekoduj obrazek
+        header, encoded = snapshot_b64.split(",", 1)
+        img_bytes = b64decode(encoded)
+        snapshot_path = Path(slide.path) / f"view_{slide.uuid}_{len(list(Path(slide.path).glob('view_*.jpg'))) + 1}.jpg"
+        with open(snapshot_path, "wb") as f:
+            f.write(img_bytes)
 
-        # Otwórz slajd
-        mrxs_files = list(Path(slide.path).glob("*.mrxs"))
-        if not mrxs_files:
-            raise HTTPException(status_code=404, detail="No slide file found")
-        slide_obj = OpenSlide(str(mrxs_files[0]))
-
-        img_w, img_h = slide_obj.dimensions
-
-        # Przytnij do granic obrazu i zabezpiecz przed ujemnymi/zerowymi rozmiarami
-        x0 = max(0, min(x, img_w - 1))
-        y0 = max(0, min(y, img_h - 1))
-        x1 = max(x0 + 1, min(x + w, img_w))
-        y1 = max(y0 + 1, min(y + h, img_h))
-
-        crop_w = x1 - x0
-        crop_h = y1 - y0
-
-        # Zapisz stan (opcjonalnie – podgląd: środek i "zoom" wyliczone z prostokąta)
-        center_x = (x0 + crop_w / 2) / img_w
-        center_y = (y0 + crop_h / 2) / img_h
-        approx_zoom = max(img_w / crop_w, img_h / crop_h)  # przybliżenie
-
+        # Zapisz stan widoku
         state = ViewState(
             slide_id=slide.id,
-            zoom_level=float(approx_zoom),
-            center_x=float(center_x),
-            center_y=float(center_y)
+            zoom_level=float(view.get("zoom", 1.0)),
+            center_x=float(view.get("center_x", 0.5)),
+            center_y=float(view.get("center_y", 0.5)),
+            rotation=float(view.get("rotation", 0.0))
         )
         db.add(state)
         await db.commit()
         await db.refresh(state)
 
-        # Pobierz region z poziomu 0 i ewentualnie przeskaluj do rozdzielczości okna
-        try:
-            region = slide_obj.read_region((x0, y0), 0, (crop_w, crop_h)).convert("RGB")
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"read_region failed: {e}")
-
-        # Jeśli znamy rozmiar okna, skompresuj do niego (lżejszy plik, 1:1 z tym co widzi user)
-        if target_w > 0 and target_h > 0:
-            # Zachowaj aspekt prostokąta widoku – dopasuj do okna bez rozciągania
-            scale = min(target_w / crop_w, target_h / crop_h)
-            out_w = max(1, int(crop_w * scale))
-            out_h = max(1, int(crop_h * scale))
-            if out_w != crop_w or out_h != crop_h:
-                region = region.resize((out_w, out_h), Image.LANCZOS)
-
-        # Zapisz na dysku (opcjonalnie) i zwróć jako attachment
-        snapshot_path = Path(slide.path) / f"view_{state.id}.jpg"
-        region.save(snapshot_path, "JPEG", quality=90)
-
-        # Nagłówek Content-Disposition wymusza pobranie przy bezpośrednim wejściu na URL,
-        # ale my i tak robimy download przez blob – to dodatkowe zabezpieczenie.
-        return FileResponse(
-            snapshot_path,
-            filename=f"view_{state.id}.jpg",
-            media_type="image/jpeg",
-            headers={"Content-Disposition": f'attachment; filename="view_{state.id}.jpg"'}
-        )
+        return {"status": "ok", "snapshot": str(snapshot_path), "view_id": state.id}
 
     @app.get("/last_view/{slide_uuid}")
     async def last_view(slide_uuid: str, db: AsyncSession = Depends(get_db)):
@@ -398,5 +335,6 @@ def register_routes(app: FastAPI):
             "zoom": state.zoom_level,
             "center_x": state.center_x,
             "center_y": state.center_y,
+            "rotation": state.rotation,
             "saved_at": state.saved_at
         }

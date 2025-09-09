@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from datetime import datetime
 import uuid
 
-DATABASE_URL = "sqlite+aiosqlite:///./slides.db"  # simple dev setup
+DATABASE_URL = "sqlite+aiosqlite:///./slides.db"  # baza SQLite
 
 Base = declarative_base()
 
@@ -25,6 +25,7 @@ class ViewState(Base):
     zoom_level = Column(Float, nullable=False)
     center_x = Column(Float, nullable=False)
     center_y = Column(Float, nullable=False)
+    rotation = Column(Float, default=0.0)
     saved_at = Column(DateTime, default=datetime.utcnow)
 
     slide = relationship("Slide", back_populates="view_states")

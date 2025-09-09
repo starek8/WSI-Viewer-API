@@ -1,12 +1,14 @@
+# db.py
 from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from datetime import datetime
 import uuid
 
-DATABASE_URL = "sqlite+aiosqlite:///./slides.db"  # baza SQLite
+DATABASE_URL = "sqlite+aiosqlite:///./slides.db"
 
 Base = declarative_base()
+
 
 class Slide(Base):
     __tablename__ = "slides"
@@ -16,7 +18,8 @@ class Slide(Base):
     path = Column(String, nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
-    view_states = relationship("ViewState", back_populates="slide")
+    view_states = relationship("ViewState", back_populates="slide", cascade="all, delete")
+
 
 class ViewState(Base):
     __tablename__ = "view_states"
@@ -33,6 +36,7 @@ class ViewState(Base):
 
 engine = create_async_engine(DATABASE_URL, echo=False, future=True)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
 
 async def init_db():
     async with engine.begin() as conn:

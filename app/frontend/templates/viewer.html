@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Viewer{% endblock %}
+{% block head %}
+    <script src="https://openseadragon.github.io/openseadragon/openseadragon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+{% endblock %}
+{% block content %}
+    <div id="toolbar">
+        <button onclick="window.location.href='{{ url_for('root') }}'">Back</button>
+        <button id="saveBtn">Save View</button>
+        <button id="loadBtn">Load Last View</button>
+        <select id="viewSelect"></select>
+        <button id="loadSelectedBtn">Load Selected View</button>
+    </div>
+    <div id="openseadragon"></div>
+    <script>
+        const slide_uuid = "{{ slide_uuid }}";
+        const filename = "{{ filename }}";
+    </script>
+    <script src="/static/js/viewer.js"></script>
+{% endblock %}

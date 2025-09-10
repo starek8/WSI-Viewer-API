@@ -16,6 +16,7 @@ class Slide(Base):
     uuid = Column(String, unique=True, default=lambda: str(uuid.uuid4()))
     name = Column(String, nullable=False)
     path = Column(String, nullable=False)
+    filename = Column(String, nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
     view_states = relationship("ViewState", back_populates="slide", cascade="all, delete")

@@ -1,0 +1,29 @@
+body { font-family: Arial, sans-serif; background:#fafafa; text-align:center; padding:2em; }
+h1 { color:#2c3e50; }
+.dropzone {
+    border: 3px dashed #3498db;
+    border-radius: 10px;
+    padding: 3em;
+    background: #ecf6fb;
+    color: #555;
+    cursor: pointer;
+    transition: background 0.3s;
+    margin: 2em auto;
+    width: 60%;
+}
+.dropzone.dragover { background:#d6ebfa; }
+ul { list-style:none; padding:0; }
+li { margin:0.5em 0; }
+a { color:#3498db; text-decoration:none; font-weight:bold; }
+a:hover { text-decoration:underline; }
+
+#openseadragon { width:100%; height:100vh; background:#000; }
+#toolbar {
+    position:absolute; top:1em; left:10vw; z-index:10;
+}
+#toolbar button {
+    padding:0.6em 1.2em; font-size:1em; border-radius:8px;
+    border:none; background:#3498db; color:white; cursor:pointer;
+    margin-right:0.5em;
+}
+#toolbar button:hover { background:#2980b9; }

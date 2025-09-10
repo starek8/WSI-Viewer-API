@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}WSI Upload{% endblock %}
+{% block content %}
+    <h1>Upload and View WSI (.zip with .mrxs + data)</h1>
+    <form id="uploadForm">
+        <div id="dropzone" class="dropzone">Drag & Drop .zip file here<br>or click to select</div>
+        <input type="file" id="fileInput" name="file" accept=".zip" style="display:none" />
+    </form>
+    {% if slides %}
+        <h2>Available Slides:</h2>
+        <ul>
+        {% for s in slides %}
+            <li><a href="/viewer/{{ s.uuid }}/{{ s.filename }}">{{ s.name }}</a></li>
+        {% endfor %}
+        </ul>
+    {% else %}
+        <p>No slides uploaded.</p>
+    {% endif %}
+    <script src="/static/js/index.js"></script>
+{% endblock %}

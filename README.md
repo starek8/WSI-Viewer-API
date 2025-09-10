@@ -1,1 +1,1 @@
-WSI-Viewer-API is an API for serving and visualizing Whole Slide Images (WSI) in a tiled, zoomable format. Designed for medical and research applications, it enables efficient access to large pathology slides by dynamically generating image tiles.
+WSI-Viewer-API is an API for serving and visualizing Whole Slide Images (WSI) in a tiled, zoomable format. Designed for medical and research applications, it enables efficient access to large pathology slides by dynamically generating image tiles. Enables us to save parts of interest in multiple images at the same time.
